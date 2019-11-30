@@ -1,6 +1,19 @@
 """
 Script for training a given model architecture
-v0.1 November 29, 2019
+v0.2 November 29, 2019
+
+Script to train a voice to voice+face model for given hyperparameters and a 
+given (trained) voice autoencoder.
+
+INPUTS:
+- a trained voice autoencoder - edit AE_save_state to be the filepath of its save state 
+- edit the hyperparameters listed before the main function definition
+- note: provide the training voice data ONLY, not the voices for any IDs in the 
+        validation or test sets, as we do not want the model to see any 
+        validation or test set faces.
+OUTPUTS:
+- saves the full model model state at "./model_state.pth"
+- saves the convergence plot and list of loss at each iteration in a folder named "./convergence"
 """
 
 import numpy as np
@@ -11,7 +24,31 @@ from glob import glob
 from datetime import datetime
 import matplotlib.pyplot as plt
 
-# TODO manually split train, validate, IDs and put them into folders
+# HS TODO tonight
+# give MY and JZ instructions for getting access to GCP and requesting high performance GPUs
+# upload full data to drive
+# start training voice AE tonight
+
+# MY TODO tonight
+# sign up for GCP and request approval for high performance GPUs
+# think of solution for face MSE being huge because its std is not 1.
+
+# JZ TODO tonight or asap tomorrow
+# - sign up for GCP and request approval for high performance GPUs
+# - ensure evaluation task can take a list of (reconstructed) face matrices, 
+#       and list of IDs, and output an evaluation metric / list of evaluation metrics
+#       you can assume that a face_dict will be provided where face_dict[ID] returns
+#       the true face matrix associated with the ID.
+# - think about what chart(s) we can show on the results section of the poster for the evaluation.
+
+# TODO this weekend
+# - manually separate train, validate, test IDs and put them in separate folders
+# - write a predict function that averages the reconstructed face for all voice clips belonging to ID
+# - load each model state and get eval_metric on the evaluation task
+# - pick the model/hyperparams that yields best eval_metric
+# - optional: train model using best hyperparams on train+validate data
+# - get eval_metric of the best model using the test data
+
 
 
 ALPHA = 0
@@ -20,22 +57,25 @@ NUM_EPOCHS = 100
 BATCH_SIZE = 10
 voice_loss = nn.MSELoss()
 face_loss = nn.MSELoss()
+FACE_STD = 28 # std dev of pixel values from a subsample of 93 faces. used to scale faces to have std ~= 1
 LEARNING_RATE = 1e-3
 CUDA = False
-voice_train_path = ""
-voice_validate_path = ""
-face_file_format = "data/toy_dataset/facespecs/face_{}.csv"
-FACE_SHAPE = None # None == face images are square; else enter a shape tuple
+voice_train_path = "data/Voice_to_face/voicespecs/"
+face_file_format = "data/Voice_to_face/facespecs/face_{}.csv"
+AE_save_state = "./AE_model_state_test.pth"
 
 
-# EDIT THIS CLASS
-# class full_model(nn.Module):
-#     def __init__(self, w_length, face_length):
+# # EDIT THIS CLASS
+# class Voice_Autoencoder(nn.Module):
+#     def __init__(self):
 #         """
 #         w_length: the length of the bottleneck vector i.e. # of basis faces used
 #         face_length: the height * width of the face images
 #         """
-#         super(full_model, self).__init__()
+#         super(Voice_Autoencoder, self).__init__()
+        
+#         self.w_length = None
+        
 #         self.encoder = nn.ModuleList(
 #             [
 #                 nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1), #1025 x 251
@@ -63,10 +103,6 @@ FACE_SHAPE = None # None == face images are square; else enter a shape tuple
 #                 nn.Tanh()
 #             ]
 #         )
-        
-#         self.w_length = w_length
-#         self.face_length = face_length
-#         self.B = nn.Linear(self.w_length, self.face_length, bias=False)
 
 #     def forward(self, v):
 #         # start encoder
@@ -79,38 +115,102 @@ FACE_SHAPE = None # None == face images are square; else enter a shape tuple
 #         w = v.mean(dim=3)
 #         w = w.view(N, H)
         
+#         if self.w_length == None:
+#             self.w_length = H
+        
 #         # start decoder
 #         for layer in self.decoder:
 #             v = layer.forward(v)
 #             #print(v.shape)
-            
-#         # face construction
-#         f = self.B(w)
         
-#         return v, f
+#         return v, w
 
+
+# # EXAMPLE CODE FOR TRAINING VOICE AUTOENCODER
+# print("Importing voice data. {}".format(datetime.now()))
+# train_dataset, dataloader = prep_data()
+# print("Importing face data as vectors into a dictionary. {}".format(datetime.now()))
+# train_IDs = set(train_dataset.y.unique()) # type tensor
+# face_dict = make_face_dict(train_IDs, path=face_file_format, face_std=FACE_STD)
+
+# AE_model = Voice_Autoencoder()
+# AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+# AE_NUM_EPOCHS = 100
+
+# AE_loss_epochs = []
+# for epoch in range(AE_NUM_EPOCHS):
+#     for batch in dataloader:
+#         # ===================forward=====================
+#         voice_data, IDs = batch
+#         voice_outputs, w = AE_model(voice_data)
+#         loss = voice_loss(voice_outputs, voice_data)
+#         # ===================backward====================
+#         AE_optimizer.zero_grad()
+#         loss.backward()
+#         AE_optimizer.step()
+#     # ===================log========================
+#     print('epoch [{}/{}], loss:{:.4f}, completed at {}'
+#         .format(epoch+1, AE_NUM_EPOCHS, loss.data.item(), datetime.now()))
+#     AE_loss_epochs.append(loss)
+# save_state("./AE_model_state_test.pth", AE_model, AE_optimizer, AE_loss_epochs)
 
 
 
 def main():
-    # import voice data
-    train_voice_filenames = get_filenames(voice_train_path)
-    validate_voice_filenames = get_filenames(voice_validate_path)
-    train_dataset = voice_face(train_voice_filenames, standardize=True)
-    validate_dataset = voice_face(validate_voice_filenames, standardize=True)
-    dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    print("Importing voice data. {}".format(datetime.now()))
+    train_dataset, dataloader = prep_data()
 
-    # import face data as vectors into a dictionary
+    print("Importing face data as vectors into a dictionary. {}".format(datetime.now()))
     train_IDs = set(train_dataset.y.unique()) # type tensor
-    validate_IDs = set(validate_dataset.y.unique())
-    IDs = train_IDs.union(validate_IDs)
-    face_dict = make_face_dict(IDs, path=face_file_format)
-
+    face_dict = make_face_dict(train_IDs, path=face_file_format, face_std=FACE_STD)
+    
     # train model and save outputs
-    model = 
+    print("Loading Voice Autoencoder model. {}".format(datetime.now()))
+    AE_model = Voice_Autoencoder()
+    AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    load_state(AE_save_state, AE_model, AE_optimizer, print_model=True)
+    # AE_model = TODO LOAD MODEL
+
+    print("Training model. {}".format(datetime.now()))
+    model = full_model(AE_model, face_shape=(128,128))
+    if CUDA:
+        model = model.cuda()
     train_model(model, dataloader, face_dict)
 
-def make_face_dict(IDs, path=face_file_format):
+    print("Model training complete. {}".format(datetime.now()))
+
+
+class full_model(nn.Module):
+    def __init__(self, AE_model, face_shape=(128,128)):
+        """
+        AE_model: a voice autoencoder model whose forward function returns v, w,
+                  where v is the voice reconstruction and w is the embedding
+        face_length: the height * width of the face images
+        """
+        super(full_model, self).__init__()
+        self.AE_model = AE_model
+        self.w_length = AE_model.w_length
+        self.face_length = face_shape[0] * face_shape[1]
+        self.B = nn.Linear(self.w_length, self.face_length, bias=False)
+
+    def forward(self, v):
+        # run voice input through AE
+        v, w = self.AE_model(v)
+        
+        # face construction
+        f = self.B(w)
+        
+        return v, f
+
+
+def prep_data():
+    train_voice_filenames = get_filenames(voice_train_path)
+    train_dataset = voice_face(train_voice_filenames, standardize=True)
+    dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    return train_dataset, dataloader
+
+
+def make_face_dict(IDs, path=face_file_format, face_std=1):
     """
     INPUTS:
     - IDs: a 1D tensor or iterable of int IDs
@@ -124,23 +224,25 @@ def make_face_dict(IDs, path=face_file_format):
         assert(type(ID) == int)
         
         face_filename = face_file_format.format(ID)
-        face_dict[ID] = np.loadtxt(face_filename, delimiter=',').flatten()
+        face_arr = np.loadtxt(face_filename, delimiter=',').flatten()
+        face_arr = face_arr / face_std # scale to have std dev ~= 1
+        face_dict[ID] = face_arr
     return face_dict
 
 
-def get_filenames(voice_paths):
+def get_filenames(paths, filename_format="voice_*"):
     # in case only one path given, make it a list so that it's iterable
-    if type(voice_paths) == str:
-        voice_paths = [voice_paths]
+    if type(paths) == str:
+        paths = [paths]
 
     # get lists of all voice filenames
-    voice_filenames = []
-    for path in voice_paths:
+    filenames = []
+    for path in paths:
         if path[-1] != '/':
             path += '/'
-        voice_filenames += glob(path+"voice_*")
+        filenames += glob(path + filename_format)
    
-    return voice_filenames
+    return filenames
 
 
 class voice_face(Dataset):
@@ -246,7 +348,7 @@ def train_model(model, dataloader, face_dict):
         for batch in dataloader:
             # ===================forward=====================
             voice_data, IDs = batch
-            # voice_outputs, face_outputs = model(voice)
+            # voice_outputs, face_outputs = model(voice_data)
             loss = combined_loss(model(voice_data), batch, face_dict)
             # ===================backward====================
             optimizer.zero_grad()
@@ -260,12 +362,12 @@ def train_model(model, dataloader, face_dict):
         loss_epochs.append(loss)
 
     save_state("./model_state.pth", model, optimizer, loss_epochs)
-    np.savetxt("./convergence/loss.csv", loss_epochs, delimiter=',')
+    np.savetxt("./convergence_loss.csv", loss_epochs, delimiter=',')
     plt.plot(range(1,len(loss_epochs)+1), loss_epochs)
     plt.title("Convergence of loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.savefig("./convergence/convergence.png")
+    plt.savefig("./convergence_plot.png")
 
 def save_state(path, model, optimizer, loss): # epoch, loss
     torch.save({
@@ -273,13 +375,15 @@ def save_state(path, model, optimizer, loss): # epoch, loss
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             #'epoch': epoch,
-            'loss': loss
+            'loss': loss,
+            'w_length': model.w_length
             }, path)
 
 def load_state(path, model, optimizer, print_model=True): # epoch, loss
     checkpoint = torch.load(path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    model.w_length = checkpoint['w_length']
     if(print_model == True):
         model_state = checkpoint['model']
         print(model_state)
