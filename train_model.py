@@ -1,6 +1,6 @@
 """
 Script for training a given model architecture
-v0.3 November 29, 2019
+v0.4 November 30, 2019
 
 Script to train a voice to voice+face model for given hyperparameters and a 
 given (trained) voice autoencoder.
@@ -202,6 +202,33 @@ class full_model(nn.Module):
         
         return v, f
 
+    def predict(self, ID, voice_filepath, face_std=FACE_STD, standardize=True):
+        if type(ID) == torch.Tensor:
+            ID = ID.item()
+        # get all voice files that correspond to that ID
+        format = "voice_{}*".format(ID)
+        voice_filenames = get_filenames(voice_filepath, filename_format=format)
+        
+        # construct spectrograms tensor
+        matrices = [] # the spectrograms
+        for v_file in voice_filenames:
+            # get spectrogram
+            matrix = np.loadtxt(v_file, delimiter=',', dtype=np.float32)
+            if standardize:
+                matrix = (matrix - np.mean(matrix)) / np.std(matrix)
+            matrices.append(matrix)
+        voices_tensor = torch.Tensor(matrices)
+        N, D, M = voices_tensor.shape
+        voices_tensor = voices_tensor.view(N, 1, D, M) # insert channel dimension
+
+        # get average of the face reconstructions as a 2D numpy array
+        _, f = self.forward(voices_tensor) # reconstruct face from every voice
+        f_mean = f.mean(dim=0) # get the average of all the reconstructed faces
+        f_mean = f_mean.detach().numpy() # convert to numpy array
+        f_mean = f_mean.reshape((128,128))
+        f_mean = f_mean * face_std # scale back up
+        return f_mean
+
 
 def prep_data():
     train_voice_filenames = get_filenames(voice_train_path)
@@ -210,7 +237,7 @@ def prep_data():
     return train_dataset, dataloader
 
 
-def make_face_dict(IDs, path=face_file_format, face_std=1):
+def make_face_dict(IDs, path=face_file_format, face_std=FACE_STD):
     """
     INPUTS:
     - IDs: a 1D tensor or iterable of int IDs
