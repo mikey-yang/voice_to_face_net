@@ -1,6 +1,6 @@
 """
 Script for training a given model architecture
-v0.2 November 29, 2019
+v0.3 November 29, 2019
 
 Script to train a voice to voice+face model for given hyperparameters and a 
 given (trained) voice autoencoder.
@@ -65,7 +65,7 @@ face_file_format = "data/Voice_to_face/facespecs/face_{}.csv"
 AE_save_state = "./AE_model_state_test.pth"
 
 
-# # EDIT THIS CLASS
+# # EITHER EDIT THIS CLASS OR IMPORT IT FROM YOUR OWN SCRIPT
 # class Voice_Autoencoder(nn.Module):
 #     def __init__(self):
 #         """
