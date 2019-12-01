@@ -1,6 +1,6 @@
 """
 Script for training and evaluating a given model architecture
-v0.5 November 30, 2019
+v0.6 December 1, 2019
 
 Script to train a voice to voice+face model for given hyperparameters and a 
 given (trained) voice autoencoder.
@@ -24,177 +24,159 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from glob import glob
 from datetime import datetime
 import matplotlib.pyplot as plt
-# import validation functions
-from V2F_eval_task import evaluate_model
-from V2F_eval_task import plot_top_n_acc
+import sys
 
-# HS TODO tonight
-# give MY and JZ instructions for getting access to GCP and requesting high performance GPUs
-# upload full data to drive
-# start training voice AE tonight
-
-# MY TODO tonight
-# sign up for GCP and request approval for high performance GPUs
-# think of solution for face MSE being huge because its std is not 1.
-
-# JZ TODO tonight or asap tomorrow
-# - sign up for GCP and request approval for high performance GPUs
-# - ensure evaluation task can take a list of (reconstructed) face matrices, 
-#       and list of IDs, and output an evaluation metric / list of evaluation metrics
-#       you can assume that a face_dict will be provided where face_dict[ID] returns
-#       the true face matrix associated with the ID.
-# - think about what chart(s) we can show on the results section of the poster for the evaluation.
 
 # TODO this weekend
-# - manually separate train, validate, test IDs and put them in separate folders
-# - write a predict function that averages the reconstructed face for all voice clips belonging to ID
-# - load each model state and get eval_metric on the evaluation task
 # - pick the model/hyperparams that yields best eval_metric
 # - optional: train model using best hyperparams on train+validate data
 # - get eval_metric of the best model using the test data
 
 
-# Training parameters
-ALPHA = 0
-ORTHOGONALIZE_B = False
-NUM_EPOCHS = 100
-BATCH_SIZE = 10
-voice_loss = nn.MSELoss()
-face_loss = nn.MSELoss()
-FACE_STD = 28 # std dev of pixel values from a subsample of 93 faces. used to scale faces to have std ~= 1
-LEARNING_RATE = 1e-3
-CUDA = False
+# Global training parameters
 voice_train_path = "data/Voice_to_face/voicespecs/"
 face_path = "data/Voice_to_face/facespecs/"
+BATCH_SIZE = 10
+voice_loss = nn.MSELoss()
+LEARNING_RATE = 1e-3
+
+# Autoencoder training parameters
+AE_NUM_EPOCHS = 50
+
+# Full model training parameters
+ALPHA = 0.5
+ORTHOGONALIZE_B = False
+NUM_EPOCHS = 100
+face_loss = nn.MSELoss()
+FACE_STD = 28 # std dev of pixel values from a subsample of 93 faces. used to scale faces to have std ~= 1
 AE_save_state = "./AE_model_state_test.pth"
 
 # Validation parameters
-validation_IDs = [127, 120, 129, 175, 161] # TODO determine this
+# validation_IDs =  # Included at the bottom of script
 validation_voice_filepath = "data/Voice_to_face/voicespecs/" # TODO determine this
 lineup_length = 10
 top_n = 10
 
 # # EITHER EDIT THIS CLASS OR IMPORT IT FROM YOUR OWN SCRIPT
-# class Voice_Autoencoder(nn.Module):
-#     def __init__(self):
-#         """
-#         w_length: the length of the bottleneck vector i.e. # of basis faces used
-#         face_length: the height * width of the face images
-#         """
-#         super(Voice_Autoencoder, self).__init__()
+class Voice_Autoencoder(nn.Module):
+    def __init__(self):
+        """
+        w_length: the length of the bottleneck vector i.e. # of basis faces used
+        face_length: the height * width of the face images
+        """
+        super(Voice_Autoencoder, self).__init__()
         
-#         self.w_length = None
+        self.w_length = None
         
-#         self.encoder = nn.ModuleList(
-#             [
-#                 nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1), #1025 x 251
-#                 nn.ReLU(True),
-#                 #nn.MaxPool2d(2, stride=2), 
-#                 nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=0), #512 x 125
-#                 nn.ReLU(True),
-#                 #nn.MaxPool2d(2, stride=2),
-#                 nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), #256 x 63
-#                 nn.ReLU(True),
-#                 nn.MaxPool2d(2, stride=2),                             #128 x 31
-#                 nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)   #128 x 31
-#             ]
-#         )
+        self.encoder = nn.ModuleList(
+            [
+                nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1), #1025 x 251
+                nn.ReLU(True),
+                #nn.MaxPool2d(2, stride=2), 
+                nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=0), #512 x 125
+                nn.ReLU(True),
+                #nn.MaxPool2d(2, stride=2),
+                nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), #256 x 63
+                nn.ReLU(True),
+                nn.MaxPool2d(2, stride=2),                             #128 x 31
+                nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)   #128 x 31
+            ]
+        )
         
-#         self.decoder = nn.ModuleList(
-#             [
-#                 nn.ConvTranspose2d(1, 32, kernel_size=3, stride=1, padding=1), # 128 x 31
-#                 nn.ReLU(True),
-#                 nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=(1,0), output_padding = (1,0)), # 256 x 63
-#                 nn.ReLU(True),
-#                 nn.ConvTranspose2d(16, 8, kernel_size=3, stride=2, padding=(1,1), output_padding = (1,0)), # 512 x 125
-#                 nn.ReLU(True),
-#                 nn.ConvTranspose2d(8, 1, kernel_size=3, stride=2, padding=0, output_padding = 0), # 1025 x 251
-#                 nn.Tanh()
-#             ]
-#         )
+        self.decoder = nn.ModuleList(
+            [
+                nn.ConvTranspose2d(1, 32, kernel_size=3, stride=1, padding=1), # 128 x 31
+                nn.ReLU(True),
+                nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=(1,0), output_padding = (1,0)), # 256 x 63
+                nn.ReLU(True),
+                nn.ConvTranspose2d(16, 8, kernel_size=3, stride=2, padding=(1,1), output_padding = (1,0)), # 512 x 125
+                nn.ReLU(True),
+                nn.ConvTranspose2d(8, 1, kernel_size=3, stride=2, padding=0, output_padding = 0), # 1025 x 251
+                nn.Tanh()
+            ]
+        )
 
-#     def forward(self, v):
-#         # start encoder
-#         for layer in self.encoder:
-#             v = layer.forward(v)
-#             #print(v.shape)
+    def forward(self, v):
+        # start encoder
+        for layer in self.encoder:
+            v = layer.forward(v)
+            #print(v.shape)
         
-#         # collapse final feature map into a vector by taking average across time
-#         N, _, H, _ = v.shape
-#         w = v.mean(dim=3)
-#         w = w.view(N, H)
+        # collapse final feature map into a vector by taking average across time
+        N, _, H, _ = v.shape
+        w = v.mean(dim=3)
+        w = w.view(N, H)
         
-#         if self.w_length == None:
-#             self.w_length = H
+        if self.w_length == None:
+            self.w_length = H
         
-#         # start decoder
-#         for layer in self.decoder:
-#             v = layer.forward(v)
-#             #print(v.shape)
+        # start decoder
+        for layer in self.decoder:
+            v = layer.forward(v)
+            #print(v.shape)
         
-#         return v, w
+        return v, w
 
 
-# # EXAMPLE CODE FOR TRAINING VOICE AUTOENCODER
-# print("Importing voice data. {}".format(datetime.now()))
-# train_dataset, dataloader = prep_data()
-# print("Importing face data as vectors into a dictionary. {}".format(datetime.now()))
-# face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
 
-# AE_model = Voice_Autoencoder()
-# AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
-# AE_NUM_EPOCHS = 100
 
-# AE_loss_epochs = []
-# for epoch in range(AE_NUM_EPOCHS):
-#     for batch in dataloader:
-#         # ===================forward=====================
-#         voice_data, IDs = batch
-#         voice_outputs, w = AE_model(voice_data)
-#         loss = voice_loss(voice_outputs, voice_data)
-#         # ===================backward====================
-#         AE_optimizer.zero_grad()
-#         loss.backward()
-#         AE_optimizer.step()
-#     # ===================log========================
-#     print('epoch [{}/{}], loss:{:.4f}, completed at {}'
-#         .format(epoch+1, AE_NUM_EPOCHS, loss.data.item(), datetime.now()))
-#     AE_loss_epochs.append(loss)
-# save_state("./AE_model_state_test.pth", AE_model, AE_optimizer, AE_loss_epochs)
 
 
 
 def main():
-    print("Importing voice data. {}".format(datetime.now()))
-    train_dataset, dataloader = prep_data()
-
-    print("Importing face data as vectors into a dictionary. {}".format(datetime.now()))
-    face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
+    # print cuda status
+    CUDA_AVAIL = torch.cuda.is_available()
+    if (CUDA_AVAIL):
+        device = torch.cuda.current_device()
+        print("cuda available on device: ", torch.cuda.get_device_name(device))
+    else:
+        print("cuda not available.")
     
-    # train model and save outputs
-    print("Loading Voice Autoencoder model. {}".format(datetime.now()))
-    AE_model = Voice_Autoencoder()
-    AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
-    load_state(AE_save_state, AE_model, AE_optimizer, print_model=True)
-    # AE_model = TODO LOAD MODEL
+    # main function
+    if sys.argv[1] == "ae":
+        print("Importing voice data. ", datetime.now())
+        dataloader = prep_dataloader(cuda=CUDA_AVAIL)
 
-    print("Training model. {}".format(datetime.now()))
-    model = full_model(AE_model, face_shape=(128,128))
-    if CUDA:
-        model = model.cuda()
-    train_model(model, dataloader, face_dict)
-    print("Model training complete. {}".format(datetime.now()))
+        print("Importing face data as vectors into a dictionary. ", datetime.now())
+        face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
+        
+        main_ae(dataloader)
 
-    print("Start validating model. {}".format(datetime.now()))
-    top_n_acc = evaluate_model(model, 
-                               evaluate_IDs=validation_IDs, 
-                               voice_eval_path=validation_voice_filepath, 
-                               face_dict=face_dict, 
-                               lineup_length=lineup_length,
-                               top_n = top_n
-                               save=True)
-    plot_top_n_acc(top_n_acc, save=True)
-    print("Validation complete. {}".format(datetime.now()))
+    elif sys.argv[1] == "full":
+        print("Importing voice data. ", datetime.now())
+        dataloader = prep_dataloader(cuda=CUDA_AVAIL)
+
+        print("Importing face data as vectors into a dictionary. ", datetime.now())
+        face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
+        
+        # train model and save outputs
+        print("Loading Voice Autoencoder model. ", datetime.now())
+        AE_model = Voice_Autoencoder() # requires correct class definition
+        if CUDA_AVAIL:
+            AE_model = AE_model.cuda()
+        AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+        load_state(AE_save_state, AE_model, AE_optimizer, print_model=True)
+
+        print("Training model. ", datetime.now())
+        model = full_model(AE_model, face_shape=(128,128))
+        if CUDA_AVAIL:
+            model = model.cuda()
+        train_model(model, dataloader, face_dict)
+        print("Model training complete. ", datetime.now())
+
+        print("Start validating model. ", datetime.now())
+        top_n_acc = evaluate_model(model, 
+                                evaluate_IDs=validation_IDs, 
+                                voice_eval_path=validation_voice_filepath, 
+                                face_dict=face_dict, 
+                                lineup_length=lineup_length,
+                                top_n = top_n,
+                                save=True)
+        plot_top_n_acc(top_n_acc, save=True)
+        print("Validation complete. ", datetime.now())
+    else:
+        print("usage: pass ae to train autoencoder and full to train full model")
+
 
 
 class full_model(nn.Module):
@@ -248,11 +230,22 @@ class full_model(nn.Module):
         return f_mean
 
 
-def prep_data():
+
+
+
+
+
+
+
+
+def prep_dataloader(cuda=False):
     train_voice_filenames = get_filenames(voice_train_path)
     train_dataset = voice_face(train_voice_filenames, standardize=True)
     dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    return train_dataset, dataloader
+    if cuda:
+        curr_device = torch.cuda.current_device()
+        dataloader = DeviceDataloader(dataloader, curr_device)
+    return dataloader
 
 
 def make_face_dict(path=face_path, face_std=FACE_STD, IDs=None):
@@ -432,10 +425,42 @@ def train_model(model, dataloader, face_dict):
     save_state("./model_state.pth", model, optimizer, loss_epochs)
     np.savetxt("./convergence_loss.csv", loss_epochs, delimiter=',')
     plt.plot(range(1,len(loss_epochs)+1), loss_epochs)
-    plt.title("Convergence of loss")
+    plt.title("Convergence of loss for full model")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.savefig("./convergence_plot.png")
+
+
+def main_ae(dataloader):
+    print("Training Voice Autoencoder model. ", datetime.now())
+    AE_model = Voice_Autoencoder()
+    if CUDA_AVAIL:
+        AE_model = AE_model.cuda()
+    AE_optimizer = torch.optim.Adam(AE_model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+
+    AE_loss_epochs = []
+    for epoch in range(AE_NUM_EPOCHS):
+        for batch in dataloader:
+            # ===================forward=====================
+            voice_data, IDs = batch
+            voice_outputs, w = AE_model(voice_data)
+            loss = voice_loss(voice_outputs, voice_data)
+            # ===================backward====================
+            AE_optimizer.zero_grad()
+            loss.backward()
+            AE_optimizer.step()
+        # ===================log========================
+        print('epoch [{}/{}], loss:{:.4f}, completed at {}'
+            .format(epoch+1, AE_NUM_EPOCHS, loss.data.item(), datetime.now()))
+        AE_loss_epochs.append(loss)
+    save_state("./AE_model_state_test.pth", AE_model, AE_optimizer, AE_loss_epochs)
+    np.savetxt("./AE_convergence_loss.csv", AE_loss_epochs, delimiter=',')
+    plt.plot(range(1,len(AE_loss_epochs)+1), AE_loss_epochs)
+    plt.title("Convergence of loss for AE model")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.savefig("./AE_convergence_plot.png")
+
 
 def save_state(path, model, optimizer, loss): # epoch, loss
     torch.save({
@@ -489,9 +514,318 @@ def gram_schmidt(vv):
     return uu
 # source: https://github.com/legendongary/pytorch-gram-schmidt
 
+class DeviceDataloader():
+    """Wrap a dataloader to move data to a device"""
+    def __init__(self, dl, device):
+        self.dl = dl
+        self.device = device
+    def __iter__(self):
+        """Yield a batch of data after moving it to device"""
+        for b in self.dl:
+            yield to_device(b, self.device)
+    def __len__(self):
+        """Number of batches"""
+        return len(self.dl)
+# source: https://medium.com/dsnet/training-deep-neural-networks-on-a-gpu-with-pytorch-11079d89805
+
+def to_device(data, device):
+    """Move tensor(s) to chosen device"""
+    if isinstance(data, (list,tuple)):
+        return [to_device(x, device) for x in data]
+    return data.to(device, non_blocking=True)
+# source: https://medium.com/dsnet/training-deep-neural-networks-on-a-gpu-with-pytorch-11079d89805
+
+
 # helper routine
 def conv_shape(L, K, S, P):
     return (L + 2*P - K) // S + 1
 
 
+
+
+
+
+
+
+
+
+
+"""V2F_eval_task.py"""
+# import numpy as np
+from scipy.linalg import sqrtm
+# import matplotlib.pyplot as plt
+# import torch
+# from datetime import datetime
+
+def evaluate_model(model, evaluate_IDs, voice_eval_path, face_dict, lineup_length=10, top_n=10, save=True):
+    """
+    Evaluates the face predictions for a given model with a line up task.
+    The task is repeated for every ID given in the evaluate_IDs list, and a list
+    of the rank of the real_face in each task is returned. See the function 
+    lineup for details of the task.
+    INPUTS
+    - model:            a given model with a model.predict method that takes an 
+                        ID and voice pathname and returns a face reconstruction
+    - evaluate_IDs:     a list of IDs to evaluate
+    - voice_eval_path:       the pathname where the voice spectrograms of the given 
+                        evaluate_IDs can be found, in csv form
+    - face_dict:        a dictionary of faces, where the key is the ID as an int
+                        and the value is a 2D numpy matrix of the face pixels
+    - lineup_length:    the number of IDs to place in the lineup for the task
+    """
+    if type(evaluate_IDs) == torch.Tensor:
+        evaluate_IDs = evaluate_IDs.tolist()
+    
+    N = len(evaluate_IDs)
+
+    ranks = []
+    for i, ID in enumerate(evaluate_IDs):
+        face_reconstr = model.predict(ID, voice_eval_path)
+        rank, error = lineup(face_reconstr, ID, face_dict, lineup_length=lineup_length)
+        ranks.append(rank)
+        print("Evaluation number {} of {}: ID={} was rank {}/{}. {}".format(
+            i+1, N, ID, rank, lineup_length, datetime.now())
+        )
+
+    top_n_acc = top_n_accuracy(ranks, top_n)
+    if save:
+        np.savetxt("./ranks.csv", ranks, delimiter=',')
+        np.savetxt("./top_n_accuracy.csv", top_n_acc, delimiter=',')
+    return top_n_acc
+
+def plot_top_n_acc(top_n_acc, save=True):
+    n_range = range(1, len(top_n_acc)+1)
+    plt.plot(n_range, top_n_acc)
+    plt.title("Model Top-n Accuracy on Evaluation Dataset")
+    plt.ylabel("Top-n Accuracy")
+    plt.xlabel("n")
+    plt.xticks(n_range)
+    if save:
+        plt.savefig("./top_n_accuracy.png")
+
+
+def top_n_accuracy(ranks, n):
+    """
+    INPUTS
+    - ranks:    1D numpy array of ranks
+    - n:        the largest top_n to output
+    OUTPUTS
+    - np.array  an array of top_n_accuracy where the n'th element is the top_n_accuracy
+    """
+    if type(ranks) == list:
+        ranks = np.array(ranks)
+    lineup_length = ranks.size
+    n = min(n, lineup_length) # check input isn't erroneous
+    
+    top_n_accuracy = []
+    for i in range(1, n+1):
+        top_i_accuracy = np.where(ranks <= i, 1, 0).sum() / lineup_length
+        top_n_accuracy.append(top_i_accuracy)
+    return np.array(top_n_accuracy)
+
+def lineup(face_reconstr, real_id, face_dict, lineup_length=10):
+    """
+    Note: includes the training faces in the lineup pool that is sampled from
+    """
+    assert(lineup_length <= len(face_dict))
+
+    # Set up array of face_ids for the lineup
+    other_IDs = list(face_dict.keys())
+    other_IDs.remove(real_id) # all IDs except real_id
+    others = np.random.choice(other_IDs, size=lineup_length-1, replace=False) # randomly sample
+    line_up = np.concatenate(([real_id], others)) # real_id is line_up[0]
+
+    # Calculate the FID between each real face and the reconstructed face
+    errors = np.zeros(lineup_length)
+    for i in range(lineup_length):
+        ID = line_up[i]
+        errors[i] = fid(face_reconstr, face_dict[ID])
+    
+    # minimum FID means the reconstructed face is closest to real face
+    order = np.argsort(errors)
+    #change from 0-indexing to 1-indexing
+    rank = order[0]+1
+    return rank, errors[0]
+
+
+def fid(act1, act2):
+    """
+    calculate frechet inception distance
+    """
+    # calculate mean and covariance statistics
+    mu1 = act1.mean(axis=0)
+    sigma1 = np.cov(act1, rowvar=False)
+    mu2 = act2.mean(axis=0)
+    sigma2 = np.cov(act2, rowvar=False)
+    
+    # calculate sum squared difference between means
+    ssdiff = np.sum((mu1 - mu2)**2.0)
+    
+    # calculate sqrt of product between cov
+    covmean = sqrtm(sigma1.dot(sigma2))
+    
+    # check and correct imaginary numbers from sqrt
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
+    
+    # calculate score
+    fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
+    return fid
+
+
+validation_IDs = [
+    285,
+    397,
+    376,
+    223,
+    836,
+    175,
+    315,
+    804,
+    106,
+    758,
+    338,
+    906,
+    528,
+    565,
+    198,
+    379,
+    854,
+    207,
+    123,
+    173,
+    828,
+    431,
+    399,
+    407,
+    834,
+    621,
+    339,
+    1019,
+    481,
+    75,
+    722,
+    684,
+    888,
+    150,
+    554,
+    373,
+    250,
+    922,
+    824,
+    649,
+    24,
+    874,
+    111,
+    161,
+    426,
+    231,
+    765,
+    138,
+    665,
+    976,
+    717,
+    844,
+    421,
+    840,
+    596,
+    883,
+    872,
+    141,
+    122,
+    672,
+    369,
+    500,
+    549,
+    246,
+    964,
+    474,
+    879,
+    191,
+    774,
+    690,
+    618,
+    208,
+    303,
+    319,
+    255,
+    363,
+    856,
+    954,
+    81,
+    179,
+    181,
+    486,
+    851,
+    417,
+    293,
+    275,
+    88,
+    186,
+    290,
+    447,
+    322,
+    746,
+    288,
+    489,
+    1000,
+    335,
+    380,
+    763,
+    4,
+    236,
+    264,
+    778,
+    251,
+    981,
+    449,
+    158,
+    291,
+    331,
+    741,
+    98,
+    151,
+    96,
+    996,
+    783,
+    555,
+    865,
+    661,
+    425,
+    333,
+    928,
+    65,
+    685,
+    611,
+    675,
+    1016,
+    71,
+    873,
+    762,
+    697,
+    38,
+    218,
+    992,
+    299,
+    196,
+    584,
+    295,
+    701,
+    930,
+    359,
+    269,
+    225,
+    213,
+    120,
+    558,
+    531,
+    229,
+    583,
+    348,
+    433,
+    936,
+    253,
+    435,
+    346
+]
 main()
