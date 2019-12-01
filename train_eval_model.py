@@ -39,6 +39,7 @@ face_path = "data/Voice_to_face/facespecs/"
 BATCH_SIZE = 10
 voice_loss = nn.MSELoss()
 LEARNING_RATE = 1e-3
+CUDA_AVAIL = False
 
 # Autoencoder training parameters
 AE_NUM_EPOCHS = 50
