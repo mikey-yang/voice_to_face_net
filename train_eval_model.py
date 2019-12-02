@@ -1,6 +1,6 @@
 """
 Script for training and evaluating a given model architecture
-v0.6 December 1, 2019
+v0.8 December 2, 2019
 
 Script to train a voice to voice+face model for given hyperparameters and a 
 given (trained) voice autoencoder.
@@ -32,17 +32,20 @@ import sys
 # - optional: train model using best hyperparams on train+validate data
 # - get eval_metric of the best model using the test data
 
+# Paths
+voice_train_path = "data_mlsp/train_data/"
+validation_voice_filepath = "data_mlsp/valid_data/"
+face_path = "data_mlsp/facespecs/"
+AE_save_state = "./AE_model_state.pth"
 
 # Global training parameters
-voice_train_path = "data/Voice_to_face/voicespecs/"
-face_path = "data/Voice_to_face/facespecs/"
-BATCH_SIZE = 10
+BATCH_SIZE = 5
 voice_loss = nn.MSELoss()
 LEARNING_RATE = 1e-3
 CUDA_AVAIL = False
 
 # Autoencoder training parameters
-AE_NUM_EPOCHS = 50
+AE_NUM_EPOCHS = 30
 
 # Full model training parameters
 ALPHA = 0.5
@@ -50,11 +53,9 @@ ORTHOGONALIZE_B = False
 NUM_EPOCHS = 100
 face_loss = nn.MSELoss()
 FACE_STD = 28 # std dev of pixel values from a subsample of 93 faces. used to scale faces to have std ~= 1
-AE_save_state = "./AE_model_state_test.pth"
 
 # Validation parameters
 # validation_IDs =  # Included at the bottom of script
-validation_voice_filepath = "data/Voice_to_face/voicespecs/" # TODO determine this
 lineup_length = 10
 top_n = 10
 
@@ -74,10 +75,10 @@ class Voice_Autoencoder(nn.Module):
                 nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1), #1025 x 251
                 nn.ReLU(True),
                 #nn.MaxPool2d(2, stride=2), 
-                nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=0), #512 x 125
+                nn.Conv2d(8, 16, kernel_size=5, stride=2, padding=1), #512 x 125
                 nn.ReLU(True),
                 #nn.MaxPool2d(2, stride=2),
-                nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), #256 x 63
+                nn.Conv2d(16, 32, kernel_size=5, stride=2, padding=2), #256 x 63
                 nn.ReLU(True),
                 nn.MaxPool2d(2, stride=2),                             #128 x 31
                 nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)   #128 x 31
@@ -125,28 +126,27 @@ class Voice_Autoencoder(nn.Module):
 
 
 def main():
-    # print cuda status
-    CUDA_AVAIL = torch.cuda.is_available()
-    if (CUDA_AVAIL):
-        device = torch.cuda.current_device()
-        print("cuda available on device: ", torch.cuda.get_device_name(device))
+    if sys.argv[1] != "sequential" and sys.argv[1] != "combined_only":
+        print("usage: pass \"sequential\" to train autoencoder and full model sequentially")
+        print("pass \"combined_only\" to use a pre-trained autoencoder")
     else:
-        print("cuda not available.")
-    
-    # main function
-    if sys.argv[1] == "ae":
-        print("Importing voice data. ", datetime.now())
-        dataloader = prep_dataloader(cuda=CUDA_AVAIL)
-
-        print("Importing face data as vectors into a dictionary. ", datetime.now())
-        face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
+        # print cuda status
+        CUDA_AVAIL = torch.cuda.is_available()
+        if (CUDA_AVAIL):
+            device = torch.cuda.current_device()
+            print("cuda available on device: ", torch.cuda.get_device_name(device))
+        else:
+            print("cuda not available.")
         
-        main_ae(dataloader)
-
-    elif sys.argv[1] == "full":
+        # import voice data
         print("Importing voice data. ", datetime.now())
         dataloader = prep_dataloader(cuda=CUDA_AVAIL)
+        
+        # train autoencoder if specified
+        if sys.argv[1] == "sequential":
+            main_ae(dataloader)
 
+        # import face data
         print("Importing face data as vectors into a dictionary. ", datetime.now())
         face_dict = make_face_dict(path=face_path, face_std=FACE_STD)
         
@@ -175,8 +175,6 @@ def main():
                                 save=True)
         plot_top_n_acc(top_n_acc, save=True)
         print("Validation complete. ", datetime.now())
-    else:
-        print("usage: pass ae to train autoencoder and full to train full model")
 
 
 
@@ -237,7 +235,7 @@ class full_model(nn.Module):
 
 
 
-
+# Main routine functions
 
 def prep_dataloader(cuda=False):
     train_voice_filenames = get_filenames(voice_train_path)
@@ -422,9 +420,9 @@ def train_model(model, dataloader, face_dict):
         print('epoch [{}/{}], loss:{:.4f}, completed at {}'
             .format(epoch+1, NUM_EPOCHS, loss.data.item(), datetime.now()))
         loss_epochs.append(loss)
+        save_state("./model_state.pth", model, optimizer, loss_epochs)
+        np.savetxt("./convergence_loss.csv", loss_epochs, delimiter=',')
 
-    save_state("./model_state.pth", model, optimizer, loss_epochs)
-    np.savetxt("./convergence_loss.csv", loss_epochs, delimiter=',')
     plt.plot(range(1,len(loss_epochs)+1), loss_epochs)
     plt.title("Convergence of loss for full model")
     plt.xlabel("Epoch")
@@ -454,8 +452,9 @@ def main_ae(dataloader):
         print('epoch [{}/{}], loss:{:.4f}, completed at {}'
             .format(epoch+1, AE_NUM_EPOCHS, loss.data.item(), datetime.now()))
         AE_loss_epochs.append(loss)
-    save_state("./AE_model_state_test.pth", AE_model, AE_optimizer, AE_loss_epochs)
-    np.savetxt("./AE_convergence_loss.csv", AE_loss_epochs, delimiter=',')
+        save_state("./AE_model_state.pth", AE_model, AE_optimizer, AE_loss_epochs)
+        np.savetxt("./AE_convergence_loss.csv", AE_loss_epochs, delimiter=',')
+    
     plt.plot(range(1,len(AE_loss_epochs)+1), AE_loss_epochs)
     plt.title("Convergence of loss for AE model")
     plt.xlabel("Epoch")
@@ -537,7 +536,7 @@ def to_device(data, device):
 # source: https://medium.com/dsnet/training-deep-neural-networks-on-a-gpu-with-pytorch-11079d89805
 
 
-# helper routine
+## helper routine
 def conv_shape(L, K, S, P):
     return (L + 2*P - K) // S + 1
 
@@ -829,4 +828,5 @@ validation_IDs = [
     435,
     346
 ]
+
 main()
