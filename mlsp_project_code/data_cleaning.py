@@ -16,7 +16,7 @@ PATH =  'vggface/n000785/0005_01.jpg'
 PREDICTOR = "predictor.dat"
 
 # To view the sketch
-VIEW = 1
+VIEW = 0
 
 FACIAL_LANDMARKS_IDXS = OrderedDict([
 	("mouth", (48, 68)),
@@ -107,7 +107,7 @@ class FaceAligner:
         output = cv2.warpAffine(image, M, (w, h),flags=cv2.INTER_CUBIC)
         return output
 
-    def landmark(self,image,gray,draw,rects,sketch_type):
+    def landmark(self,image,gray,draw,rects):
         for (i, rect) in enumerate(rects):
             shape = self.predictor(gray, rect)
             shape = shape_to_np(shape)
@@ -119,9 +119,8 @@ class FaceAligner:
                     pts = shape[j:k]
                     for l in range(1, len(pts)):
                         ptA = tuple(pts[l - 1])
-                        ptB = tuple(pts[l])
-                        if(sketch_type == 0 or sketch_type == 1):
-                            cv2.line(draw, ptA, ptB, (0,0,255), 2)
+                        ptB = tuple(pts[l])    
+                        cv2.line(draw, ptA, ptB, (0,0,255), 2)
         return draw
 
 def generate_sketch_util(image,sketch_type):
@@ -172,7 +171,10 @@ def generate_sketch_util(image,sketch_type):
         white.fill(255)
         base_image = white
     # Draw landmarks
-    out = fa.landmark(faceAligned,gray_aligned,base_image,rects2,sketch_type)
+    if(sketch_type == 0 or sketch_type == 1):
+        out = fa.landmark(faceAligned,gray_aligned,base_image,rects2)
+    else:
+        out = faceAligned
     sk = sketch(out)
     sk = cv2.cvtColor(sk, cv2.COLOR_BGR2GRAY)
 
@@ -210,7 +212,7 @@ def check_nonaligned(file_path,output_path):
 # Type = 1 - draw landmarks on the sketched face
 # Type = 2 - just sketch, no landmarks
 
-# x = generate_sketch(PATH,2)
+# x = generate_sketch(PATH,0)
 # if (x is not None):
 #     cv2.imshow("Sketch",x)
 #     cv2.waitKey(0)
