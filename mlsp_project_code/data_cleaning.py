@@ -2,12 +2,16 @@ import numpy as np
 import cv2
 import dlib 
 import imutils
+import threading
+import multiprocessing
+from joblib import Parallel, delayed
 from collections import OrderedDict
 
 # Path to file containing the file list
 # for all images
 FILE_PATH = "vggface_list.txt"
 
+OUTPUT_PATH = 'unaligned.txt'
 # For testing
 PATH =  'vggface/n000785/0005_01.jpg'
 
@@ -123,7 +127,7 @@ class FaceAligner:
                         cv2.line(draw, ptA, ptB, (0,0,255), 2)
         return draw
 
-def generate_sketch_util(image,sketch_type):
+def generate_sketch_util(image):
     
     image = imutils.resize(image, width=500)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -137,12 +141,12 @@ def generate_sketch_util(image,sketch_type):
     for rect in rects:
         (x, y, w, h) = rect_to_bb(rect)
         if(x < 0 or y < 0 or w < 0 or h < 0):
-            return None
+            return None,None,None
         faceOrig = imutils.resize(image[y:y + h, x:x + w], width=256,height = 256)
         faceAligned = fa.align(image, gray, rect) 
     # Return None if cant align image
     if(faceAligned is None):
-        return None
+        return None,None,None
 
     if(VIEW):
         cv2.imshow("Before Crop", faceAligned)
@@ -165,57 +169,81 @@ def generate_sketch_util(image,sketch_type):
     gray_aligned = cv2.cvtColor(faceAligned, cv2.COLOR_BGR2GRAY)
 
     base_image = faceAligned
-
-    if(sketch_type == 0):
-        white = np.zeros([256,256,3],dtype=np.uint8)
-        white.fill(255)
-        base_image = white
+    out2 = faceAligned
     # Draw landmarks
-    if(sketch_type == 0 or sketch_type == 1):
-        out = fa.landmark(faceAligned,gray_aligned,base_image,rects2)
-    else:
-        out = faceAligned
-    sk = sketch(out)
-    sk = cv2.cvtColor(sk, cv2.COLOR_BGR2GRAY)
+    out1 = fa.landmark(faceAligned,gray_aligned,base_image,rects2)
 
-    return sk
+    white = np.zeros([256,256,3],dtype=np.uint8)
+    white.fill(255)
+    base_image = white
 
-def generate_sketch(path,sketch_type):
+    out0 = fa.landmark(faceAligned,gray_aligned,base_image,rects2)
+    
+    sk0 = sketch(out0)
+    sk1 = sketch(out1)
+    sk2 = sketch(out2)
+    
+    sk0 = cv2.cvtColor(sk0, cv2.COLOR_BGR2GRAY)
+    sk1 = cv2.cvtColor(sk1, cv2.COLOR_BGR2GRAY)
+    sk2 = cv2.cvtColor(sk2, cv2.COLOR_BGR2GRAY)
+
+    return sk0,sk1,sk2
+
+def generate_sketch(path):
     image = cv2.imread(path)
     if(image is None):
         print("Incorrect path")
         return None
 
-    faceSketch = generate_sketch_util(image,sketch_type)
+    sk0,sk1,sk2 = generate_sketch_util(image)
     # if(faceSketch is None):
     #     print("Could not align the image" + path)
-    return faceSketch
+    return sk0,sk1,sk2
+
+def check_nonaligned_helper(image_path):
+    sk,_,_ = generate_sketch(image_path)
+    if(sk is None):
+        image_path = image_path.lstrip('vggface/')
+        return image_path
 
 def check_nonaligned(file_path,output_path):
     extension = 'vggface/'
     unaligned = []
+    num_cores = multiprocessing.cpu_count()
     with open(file_path,encoding = 'utf-8') as f:
-        for image_path in f:
-            image_path = extension + image_path.strip('\n')
-            sk = generate_sketch(image_path,0)
-            if(sk is None):
-                #print(image_path+" INVALID")
-                unaligned.append(image_path.lstrip(extension))
+        unaligned = Parallel(n_jobs=num_cores)(delayed(check_nonaligned_helper)(extension + image_path.strip('\n')) for image_path in f)
     with open(output_path, 'a') as op:
         for img in unaligned:
-            op.write(img+'\n')
-
-
-#check_nonaligned(FILE_PATH,'unaligned.txt')
+            if(img is not None):
+                op.write(img+'\n')
 
 # Type = 0 - draw landmarks on a blank white base
 # Type = 1 - draw landmarks on the sketched face
 # Type = 2 - just sketch, no landmarks
 
-# x = generate_sketch(PATH,0)
-# if (x is not None):
-#     cv2.imshow("Sketch",x)
-#     cv2.waitKey(0)
-#     cv2.destroyAllWindows()
+def thread_handler(image_path):
+    sk0,sk1,sk2 = generate_sketch(image_path)
+    image_path = image_path.rstrip(".jpg")
+    if(sk0 is None):
+        return
+    cv2.imwrite(image_path+"_blank.jpg",sk0)
+    cv2.imwrite(image_path+"_landmarks.jpg",sk1)
+    cv2.imwrite(image_path+"_sketch.jpg",sk2)
 
+def generate(file_path):
+    num_cores = multiprocessing.cpu_count()
+    print(num_cores)
+    extension = 'vggface/'
+    processes = []
+    with open(file_path,encoding = 'utf-8') as f:
+        Parallel(n_jobs=num_cores)(delayed(thread_handler)(extension + image_path.strip('\n')) for image_path in f)
 
+check_nonaligned(FILE_PATH,OUTPUT_PATH)
+generate(FILE_PATH)
+# x,y,z = generate_sketch(PATH)
+
+# cv2.imshow("Sketch1",x)
+# cv2.imshow("Sketch2",y)
+# cv2.imshow("Sketch3",z)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
