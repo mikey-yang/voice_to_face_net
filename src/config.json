@@ -12,6 +12,7 @@
         "type": "SpeakerID",
         "args":{
             "data_dir": "/share/workhorse3/mahmoudi/voxceleb/dataset/iden_split.txt",
+            "specgrams_dir": "/share/workhorse3/mahmoudi/voxceleb/dataset/all_specgrams.txt",
             "root_path": "/share/workhorse3/mahmoudi/voxceleb/wav_specgram",
             "file_extension": "npy",
             "batch_size": 256,
