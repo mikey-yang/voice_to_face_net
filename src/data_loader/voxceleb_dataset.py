@@ -36,15 +36,18 @@ class VoxCeleb(Dataset):
         all_specgrams = defaultdict(lambda:len(all_specgrams))
         all_files = []
         labels = set()
-
+        if label_type == 1:
+            label_type = [1,2]
+        else:
+            label_type = [3]
         with open(specgrams_dir, "r") as f:
             for line in f.readlines():
                 all_specgrams[line.strip()]
         with open(data_dir, "r") as f:
             for line in f.readlines():
                 label, filepath = line.strip().split(" ")
-                label = int(label) 
-                if label != label_type:
+                label = int(label)
+                if label not in label_type:
                     continue
                 filepath, ext = os.path.splitext(filepath)
                 filepath += "." + file_extension

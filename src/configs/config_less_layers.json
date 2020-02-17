@@ -1,9 +1,9 @@
 {
-    "name": "Voice2Face_SpeakerID",
+    "name": "Voice2Face_SpeakerID_LessLayers",
     "n_gpu": 1,
 
     "arch": {
-        "type": "SpeakerID",
+        "type": "SpeakerIDLessLayers",
         "args": {"input_dim": 257,
                  "channel_dim": 256,
                  "embed_dim": 128}
@@ -18,7 +18,7 @@
             "batch_size": 256,
             "shuffle": true,
             "validation_split": 0.0,
-            "num_workers": 32
+            "num_workers": 64
         }
     },
     "optimizer": {
@@ -31,7 +31,7 @@
     },
     "loss": "cross_entropy",
     "metrics": [
-        "accuracy", "accuracy"
+        "accuracy"
     ],
     "lr_scheduler": {
         "type": "StepLR",
