@@ -16,7 +16,6 @@ class VoxCelebVGGFace(Dataset):
         self.label_types = [types[i] for i in dataset_types]
         self.segment_length = segment_length
         self.dataset, self.labels = self.read_dataset(dataset_file)
-        self.dataset = [self.dataset[1], self.dataset[269]]
 
     def __len__(self):
         return len(self.dataset)
