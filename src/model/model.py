@@ -213,10 +213,26 @@ class VGGVox(BaseModel):
             return x
         return self.dense(x)        
 
+class VGGVoxWrapper(VGGVox):
+    def __init__(self, input_dim, embed_dim, num_classes=1251):
+        super().__init__(input_dim, embed_dim, num_classes=1251)
+
+    def forward(self, x, loss=False):
+        if loss:
+            with torch.no_grad():
+                return self.dense(x)
+
+        x = x[:,None,:,:]
+        x = self.model(x)
+        x = F.avg_pool2d(x, (1, x.size()[3]), stride=1)
+        x = x.view(x.size()[0], -1)
+        return x
+
+
 class Dictionary(BaseModel):
-    def __init__(self, in_dim, out_dim):
+    def __init__(self, input_dim, output_dim):
         super().__init__()
-        self.model = nn.Linear(in_dim, out_dim)
+        self.model = nn.Linear(in_dim, out_dim, bias=False)
     
     def forward(self, x):
         return self.model(x)

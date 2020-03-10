@@ -8,3 +8,6 @@ def nll_loss(output, target):
 
 def cross_entropy(output, target):
     return CROSSENTROPY(output, target)
+
+def face_reconstruction_loss():
+    raise "NOT IMPLEMENTED!!"

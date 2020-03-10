@@ -60,4 +60,10 @@ class VoxCeleb(Dataset):
                 if filepath not in all_specgrams:
                     continue
                 all_files.append((filepath, speaker_id))
-        return all_files, sorted(list(labels))
+
+        labels_to_return = sorted(list(labels))
+        with open("/home/mahmoudi/workhorse3/voice_to_face_net/template_labels.txt", "w") as f:
+            for x in labels_to_return:
+                f.write(x+"\n")
+        print("exported the labels, exiting now...")
+        return all_files, labels_to_return 
