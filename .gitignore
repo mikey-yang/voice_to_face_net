@@ -133,7 +133,7 @@ dmypy.json
 .pyre/
 
 ## Mac
-_Store
+.DS_Store
 .AppleDouble
 .LSOverride
 
