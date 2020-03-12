@@ -23,6 +23,11 @@ BATCHSIZE = 2
 LEARNING_RATE = 0.001
 NUM_WORKERS = 64
 RANDOM_SEED = 15213
+
+#MODEL PARAMS
+EMBED_DIM = 128
+NUM_CLASSES = 1251
+HIDDEN_DIMS = [256, 512, 1024]
 # WHERE TO WRITE MODELS
 OUTDIRPATH = "models"
 LOGGER = None
@@ -91,127 +96,94 @@ def gram_schmidt(vv):
     return uu
 
 
-def run_epoch(n_epoch, networks, dataloader, optimizer, epoch):
+def run_epoch(n_epoch, encoder, classifier, dataloader, optimizer, epoch):
     global LOGGER
 
     cross_entropy = nn.CrossEntropyLoss()
-    mse = nn.MSELoss()
 
     iters = 0.0
     total_loss = 0.0
-    total_spkr_id = 0 
-    total_face_recon = 0 
 
     start_time = time.time()
 
-    voice_network, face_network = networks
-
-    dup_face = None
-    dup_gen = None 
-
-    for index, (utt, face, y) in enumerate(dataloader):
+    for index, (data, labels) in enumerate(dataloader):
         optimizer.zero_grad()
-
+        data, labels = data.cuda(), labels.cuda()
         # update number of iterations 
-        iters += 1 
+        # iters += 1 
 
         # get the data loading time 
         end_time = time.time()
    
-        # feed the audio to get the embedding 
-        embedding = voice_network(utt.float().cuda())
-        # generate the face 
-        gen_face = face_network(embedding)
+        # feed the data to get the embedding 
+        embedding = encoder(data.cuda()) #.float()
+        # classify
+        person_id = classifier(embedding)
         
-        # take a copy of the orignal face 
-        dup_face = face
-        # take a copy of the generated face 
-        dup_gen = gen_face
-
         # calculate the loss 
-        y = y.cuda()
-        logits = voice_network(embedding, loss=True)
-        loss_speakerid = cross_entropy(logits, y)
-        loss_face_recon = mse(gen_face, face.float().cuda())
-
-        total_spkr_id += loss_speakerid.item()
-        total_face_recon += loss_face_recon.item()
-
-        # combine the loss 
-        loss = ALPHA * loss_speakerid + BETA * loss_face_recon
+        loss = cross_entropy(person_id, labels)
 
         total_loss += loss.item()
         loss.backward()
         optimizer.step()
-        
-        # Orthogalize the face embeddings 
-        face_network.linear.weight.data = gram_schmidt(face_network.linear.weight.data)
 
-        all_losses = {"LOSS": loss.item(), 
-                      "SPEAKER ID LOSS": loss_speakerid.item(), 
-                      "FACE RECONSTRUCTION": loss_face_recon.item()}
+        all_losses = {"LOSS": loss.item()}
         LOGGER.log_minibatch(index, n_epoch, all_losses)
         all_losses["batch"] = index 
         wandb.log(all_losses)
 
-    
-    # code to output generated faces during training 
-    dup_face = dup_face.detach().cpu().numpy()
-    dup_gen = dup_gen.detach().cpu().numpy()
-    dup_face_img = Image.fromarray(dup_face[1,:].reshape(128, 128).astype(np.uint8))
-    dup_gen_img = Image.fromarray(dup_gen[1,:].reshape(128, 128).astype(np.uint8))
-
     end_time = time.time()
-    avgloss = total_loss/iters #@FIXME: iters --> can be updated to len(dataloader)
-    avgloss_speaker_id = total_spkr_id/iters
-    avgloss_face = total_face_recon/iters
+    avgloss = total_loss/len(dataloader) #UPDATE: iters --> updated to len(dataloader)
+    
+    LOGGER.log_epoch(n_epoch, "train", {"EPOCH LOSS": avgloss})
 
-    LOGGER.log_epoch(n_epoch, "train", {"EPOCH LOSS": avgloss, "SPEAKER ID LOSS": avgloss_speaker_id, "FACE ID LOSS": avgloss_face})
+    wandb.log({"epoch": n_epoch+1, "loss": avgloss})
 
-    wandb.log({"epoch": n_epoch+1, "loss": avgloss, "original_face": [wandb.Image(dup_face_img)], "reconstructed_face": [wandb.Image(dup_gen_img)]})
+    return avgloss
 
-    accuracy = 0
-    return avgloss, accuracy
 
-def train(train_dataset):
+def train(train_dataset, model_mode):
     global LOGGER
 
     # init the datasets & data loaders 
-    dataset = VoxCelebVGGFace(train_dataset, ["train"])
+    dataset = VoxCelebVGGFace(train_dataset, ["train"], model_mode)
     data_loader = DataLoader(dataset, BATCHSIZE, shuffle=True, num_workers=NUM_WORKERS, drop_last=True)
 
     # init the testing dataset & data loader
-    dataset_test = VoxCelebVGGFace(train_dataset, ["test"])
+    dataset_test = VoxCelebVGGFace(train_dataset, ["test"], model_mode)
     data_loader_test = DataLoader(dataset, BATCHSIZE, shuffle=True, num_workers=NUM_WORKERS, drop_last=True)
 
     # init the model
-    voice_network = VGGVoxWrapper(257, 128).cuda()
-    face_network = Dictionary(128, 128*128).cuda()
+    encoder_network = None
+    if (model_mode == "voice"):
+        encoder_network = VGGVoxWrapper(257, EMBED_DIM).cuda()
+    if (model_mode == "face"):
+        encoder_network = ResNet18().cuda() #@TODO: add the init args
+    if (model_mode == "dual"):
+        pass
+    mlp_network = CommonMLP(EMBED_DIM, HIDDEN_DIMS, NUM_CLASSES)
 
-    voice_network.load_state_dict(load(VGGVOX_WEIGHTS))
+    #network.load_state_dict(load(VGGVOX_WEIGHTS))
 
-    optimizer = optim.Adam(chain(voice_network.parameters(), face_network.parameters()), lr=LEARNING_RATE)
+    optimizer = optim.Adam(chain(encoder_network.parameters(),mlp_network.parameters()), lr=LEARNING_RATE)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
-
 
     # init the logger
     config = {"epochs": EPOCHS, "lr": LEARNING_RATE, "batch_size": BATCHSIZE,
               "random_seed": RANDOM_SEED, "dataset_size": len(dataset)}
 
 
-    LOGGER = Logger(OUTDIRPATH, config, {"VOICE_NETWORK": voice_network, "FACE_NETWORK": face_network})
+    LOGGER = Logger(OUTDIRPATH, config, {"ENCODER_NETWORK": encoder_network, "MLP_NETWORK": mlp_network})
 
     config["timestamp"] = LOGGER.current_timestamp
     config["alpha"] = ALPHA
     config["beta"]  = BETA
     wandb.config.update(config)
 
-    networks = [voice_network, face_network]
-
     for epoch in range(EPOCHS):
         print("Epoch: {}".format(epoch+1))
         # train an epoch 
-        epoch_loss, epoch_acc = run_epoch(epoch, networks, data_loader, optimizer, epoch)
+        epoch_loss = run_epoch(epoch, encoder_network, mlp_network, data_loader, optimizer, epoch)
         #@TODO: implement validation model 
         # validate the model 
         # val_loss, epoch_acc = val_model(net, epoch, val_data_loader)
@@ -222,8 +194,9 @@ def train(train_dataset):
         # poke your scheduler if you wish...
         # scheduler.step(epoch_loss)
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python train.py dataset_mapping")
+        print("Usage: python train.py dataset_mapping \"voice\"|\"face\"|\"dual\">")
         exit(1)
-    train(sys.argv[1])
+    train(sys.argv[1], sys.argv[2])
