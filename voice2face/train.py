@@ -3,13 +3,16 @@ import sys
 import time
 import random 
 import math 
-import numpy as np 
+from itertools import chain
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch import save, dist, load
-from itertools import chain
+from sklearn.metrics import roc_auc_score
+
 from networks import VGGVoxWrapper, Dictionary, VGGVox
 from dataloader import VoxCelebVGGFace
 from utils_v2f import Logger
@@ -20,55 +23,82 @@ wandb.init(project="v2f")
 # TRAINING HYPERPARAMETERS
 EPOCHS = 100000
 BATCHSIZE = 2
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.1
+N_EPOCHS = 100000
+MOMENTUM = 0.9
+SCHEDULE = 'plateau'
+W_DECAY = 0.0001
+
+# RESNET ARCHITECTURE
+IN_CHANNELS = 3  # RGB
+BLOCK_CHANNELS = [64, 128, 256, 512]
+LAYER_BLOCKS = [3, 4, 6, 3]
+KERNEL_SIZES = [3, 3, 3, 3]
+STRIDES = [1, 2, 2, 2]  # 64 => 64 -> 32 -> 16 -> 8 => 8
+POOL_SIZE = 4  # 8 => 2
+
 NUM_WORKERS = 64
 RANDOM_SEED = 15213
 # WHERE TO WRITE MODELS
 OUTDIRPATH = "models"
+DATADIR = None
 LOGGER = None
 ALPHA = 1
 BETA = 1
-# VGGVOX_WEIGHTS = "/share/workhorse3/mahmoudi/voice_to_face_net/src/saved/models/Voice2Face_SpeakerID_VGGVox/0213_120446/model_best.pth"
-VGGVOX_WEIGHTS = "/share/workhorse3/mahmoudi/voice_to_face_net/speaker_id_weights.pth"
+
+
+TRAIN_PATH = ""
+VAL_PATH = ""
+TEST_PATH = ""
+SAVE_PATH = ""
+LOAD_PATH = ""
+
+
+
+
+
+
+
+
 
 # SET RANDOM SEEDS
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 
-def val_model(model, n_epoch, dataloader):
-    global LOGGER
-    model.eval()
-    total = 0.0
-    correct = 0.0
-    criterion = nn.CrossEntropyLoss()
-    softmax = nn.Softmax(dim=1)
-
-    avgloss = 0.0
-    iters = 0
-    for index, (x,y) in enumerate(dataloader):
-        iters += 1
-        # y = y.cuda()    
-        # print("X: {}".format(x))
-        # print("X SHAPE: {}".format(x.size()))
-        y_hat = model(x)
-        y_hat = y_hat.cpu()
-        loss = criterion(y_hat, y)     
-        # y_hat = softmax(y_hat)
-        # y_hat = y_hat.cpu()
-        # y = y.cpu()
-        val, index1 = y_hat.max(1)
-        # print("Softmax: {}".format(y_hat))
-        # print("Labels: {}".format(y))
-        correct += ((y-index1) == 0).sum(dim=0).item()
-
-        total += len(y)
-        avgloss += loss
-
-    avgloss /= iters
-    accuracy = correct/total
-    model.train()
-    LOGGER.log_accuracy("validation", n_epoch, accuracy, avgloss)
-    return avgloss, accuracy
+# def val_model(model, n_epoch, dataloader):
+#     global LOGGER
+#     model.eval()
+#     total = 0.0
+#     correct = 0.0
+#     criterion = nn.CrossEntropyLoss()
+#     softmax = nn.Softmax(dim=1)
+#
+#     avgloss = 0.0
+#     iters = 0
+#     for index, (x,y) in enumerate(dataloader):
+#         iters += 1
+#         # y = y.cuda()
+#         # print("X: {}".format(x))
+#         # print("X SHAPE: {}".format(x.size()))
+#         y_hat = model(x)
+#         y_hat = y_hat.cpu()
+#         loss = criterion(y_hat, y)
+#         # y_hat = softmax(y_hat)
+#         # y_hat = y_hat.cpu()
+#         # y = y.cpu()
+#         val, index1 = y_hat.max(1)
+#         # print("Softmax: {}".format(y_hat))
+#         # print("Labels: {}".format(y))
+#         correct += ((y-index1) == 0).sum(dim=0).item()
+#
+#         total += len(y)
+#         avgloss += loss
+#
+#     avgloss /= iters
+#     accuracy = correct/total
+#     model.train()
+#     LOGGER.log_accuracy("validation", n_epoch, accuracy, avgloss)
+#     return avgloss, accuracy
 
 # source: https://github.com/legendongary/pytorch-gram-schmidt
 def gram_schmidt(vv):
@@ -91,11 +121,10 @@ def gram_schmidt(vv):
     return uu
 
 
-def run_epoch(n_epoch, networks, dataloader, optimizer, epoch):
+def run_epoch(n_epoch, encoder, classifier, optimizer, epoch):
     global LOGGER
 
     cross_entropy = nn.CrossEntropyLoss()
-    mse = nn.MSELoss()
 
     iters = 0.0
     total_loss = 0.0
@@ -104,43 +133,20 @@ def run_epoch(n_epoch, networks, dataloader, optimizer, epoch):
 
     start_time = time.time()
 
-    voice_network, face_network = networks
-
-    dup_face = None
-    dup_gen = None 
-
-    for index, (utt, face, y) in enumerate(dataloader):
+    for index, (data, labels) in enumerate(dataloader):
         optimizer.zero_grad()
+        data, labels = data.to(device), labels.to(device)
 
-        # update number of iterations 
-        iters += 1 
+        # update number of iterations
+        # iters += 1
 
         # get the data loading time 
         end_time = time.time()
-   
-        # feed the audio to get the embedding 
-        embedding = voice_network(utt.float().cuda())
-        # generate the face 
-        gen_face = face_network(embedding)
-        
-        # take a copy of the orignal face 
-        dup_face = face
-        # take a copy of the generated face 
-        dup_gen = gen_face
+
+        embedding = eco(data)
 
         # calculate the loss 
-        y = y.cuda()
-        logits = voice_network(embedding, loss=True)
-        loss_speakerid = cross_entropy(logits, y)
-        loss_face_recon = mse(gen_face, face.float().cuda())
-
-        total_spkr_id += loss_speakerid.item()
-        total_face_recon += loss_face_recon.item()
-
-        # combine the loss 
-        loss = ALPHA * loss_speakerid + BETA * loss_face_recon
-
-        total_loss += loss.item()
+        loss = cross_entropy(outputs, labels)
         loss.backward()
         optimizer.step()
         
@@ -172,6 +178,52 @@ def run_epoch(n_epoch, networks, dataloader, optimizer, epoch):
 
     accuracy = 0
     return avgloss, accuracy
+
+
+def evaluate(encoder, classifier, test_loader, criterion=None):
+    encoder.eval()
+    classifier.eval()
+
+    correct = 0
+    total = 0
+    auc = []
+    # test_loss = []
+    with torch.no_grad():
+        for batch_num, (data, labels) in enumerate(test_loader):
+            data, labels = data.cuda(), labels.cuda()
+
+            # get outputs
+            embeddings = encoder(data)
+            outputs = classifier(embeddings)
+
+            # get predictions
+            _, pred_labels = torch.max(F.softmax(outputs, dim=1), 1)
+            pred_labels = pred_labels.view(-1)
+
+            # count correct (accurate) predictions
+            correct += torch.sum(torch.eq(pred_labels, labels)).item()
+            total += len(labels)
+
+            # compute auc over the batch
+            batch_size = data.size()[0]  # final batch might be smaller than the rest
+            batch_roc = roc_auc_score(labels.cpu().detach().numpy(), pred_labels.cpu().detach().numpy(),
+                                      multiclass='ovr')
+            auc.extend([batch_roc] * batch_size)
+
+            # evaluate loss
+            # loss = criterion(outputs, labels.long())
+            # test_loss.extend([loss.item()] * batch_size)
+
+            # clean up
+            torch.cuda.empty_cache()
+            del data, labels
+    accuracy = correct / total
+    auc = np.mean(auc)
+
+    encoder.train()
+    classifier.train()
+    return accuracy, auc  #, np.mean(test_loss)
+
 
 def train(train_dataset):
     global LOGGER
