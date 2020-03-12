@@ -32,6 +32,7 @@ W_DECAY = 0.0001
 
 # RESNET ARCHITECTURE
 IN_CHANNELS = 3  # RGB
+IMG_SIZE = 128
 BLOCK_CHANNELS = [64, 128, 256, 512]
 LAYER_BLOCKS = [3, 4, 6, 3]
 KERNEL_SIZES = [3, 3, 3, 3]
@@ -165,7 +166,6 @@ def run_epoch(n_epoch, encoder, classifier, dataloader, optimizer, epoch):
     return avgloss
 
 
-
 def evaluate(encoder, classifier, test_loader, criterion=None):
     encoder.eval()
     classifier.eval()
@@ -227,7 +227,7 @@ def train(train_dataset):
     if (model_mode == "voice"):
         encoder_network = VGGVoxWrapper(257, EMBED_DIM).cuda()
     if (model_mode == "face"):
-        encoder_network = ResNet18().cuda() #@TODO: add the init args
+        encoder_network = Resnet(IN_CHANNELS, IMG_SIZE, BLOCK_CHANNELS, LAYER_BLOCKS, KERNEL_SIZES, STRIDES, POOL_SIZE, EMBED_DIM).cuda()
     if (model_mode == "dual"):
         pass
     mlp_network = CommonMLP(EMBED_DIM, HIDDEN_DIMS, NUM_CLASSES)
@@ -253,9 +253,10 @@ def train(train_dataset):
         print("Epoch: {}".format(epoch + 1))
         # train an epoch 
         epoch_loss = run_epoch(epoch, encoder_network, mlp_network, data_loader, optimizer, epoch)
-        #@TODO: implement validation model 
         # validate the model 
-        # val_loss, epoch_acc = val_model(net, epoch, val_data_loader)
+        acc, auc = evaluate(encoder_network, mlp_network, data_loader_test)
+        print("Accuracy: " + str(acc))
+        print("AUC: " + str(auc))
         # check point 
         LOGGER.checkpoint(epoch)
         # write out the logs 
