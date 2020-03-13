@@ -5,6 +5,7 @@ from random import randint
 from torch.utils.data import Dataset
 from collections import defaultdict
 
+PATH = "/home/mahmoudi/v2fsketch_data/"
 
 class VoxCelebVGGFace(Dataset):
     """
@@ -24,6 +25,8 @@ class VoxCelebVGGFace(Dataset):
 
     def __getitem__(self, index):
         split, utt, face, y = self.dataset[index]
+        utt = PATH + utt
+        face = PATH + face
         X_face = None
         X_voice = None
 
@@ -43,7 +46,9 @@ class VoxCelebVGGFace(Dataset):
             
         if (self.model_mode == 2 or self.model_mode == 3):
             # load the face 
-            face_pixels = np.array(Image.open(face), np.float).flatten()
+            image = Image.open(face,'r')
+            width, height = image.size
+            face_pixels = np.array(image, np.float).reshape(1,width,height)
             X_face = face_pixels
 
         # get the label for the person's ID
@@ -73,4 +78,3 @@ class VoxCelebVGGFace(Dataset):
         # generate the labels so it is consistent with the speaker ID 
         labels = ['id'+str(10000+i) for i in range(1, 1252)]
         return dataset, labels
-

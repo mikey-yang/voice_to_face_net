@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from torch import save, dist, load
 from sklearn.metrics import roc_auc_score
 
-from networks import VGGVoxWrapper, Dictionary, VGGVox
+from networks import VGGVoxWrapper, Dictionary, VGGVox, CommonMLP, Resnet
 from dataloader import VoxCelebVGGFace
 from utils_v2f import Logger
 from PIL import Image
@@ -31,7 +31,7 @@ SCHEDULE = 'plateau'
 W_DECAY = 0.0001
 
 # RESNET ARCHITECTURE
-IN_CHANNELS = 3  # RGB
+IN_CHANNELS = 1  #Not RGB
 IMG_SIZE = 128
 BLOCK_CHANNELS = [64, 128, 256, 512]
 LAYER_BLOCKS = [3, 4, 6, 3]
@@ -140,7 +140,7 @@ def run_epoch(n_epoch, encoder, classifier, dataloader, optimizer, epoch):
         end_time = time.time()
    
         # feed the data to get the embedding 
-        embedding = encoder(data.cuda()) #.float()
+        embedding = encoder(data.float().cuda())
         # classify
         person_id = classifier(embedding)
         
@@ -211,7 +211,7 @@ def evaluate(encoder, classifier, test_loader, criterion=None):
     return accuracy, auc  # , np.mean(test_loss)
 
 
-def train(train_dataset):
+def train(train_dataset, model_mode):
     global LOGGER
 
     # init the datasets & data loaders 
@@ -230,7 +230,7 @@ def train(train_dataset):
         encoder_network = Resnet(IN_CHANNELS, IMG_SIZE, BLOCK_CHANNELS, LAYER_BLOCKS, KERNEL_SIZES, STRIDES, POOL_SIZE, EMBED_DIM).cuda()
     if (model_mode == "dual"):
         pass
-    mlp_network = CommonMLP(EMBED_DIM, HIDDEN_DIMS, NUM_CLASSES)
+    mlp_network = CommonMLP(EMBED_DIM, HIDDEN_DIMS, NUM_CLASSES).cuda()
 
     #network.load_state_dict(load(VGGVOX_WEIGHTS))
 

@@ -80,24 +80,25 @@ class CommonMLP(nn.Module):
     Uses Dropout after every odd numbered hidden layer.
     """
 
-    def __init__(self, embed_dim, hidden_dims, num_classes, bias=True, dropout=0):
+    def __init__(self, embed_dim, hidden_dims, num_classes, biases=True, dropout=0):
+        super().__init__()
         if not isinstance(hidden_dims, list):
             hidden_dims = [hidden_dims]
 
-        self.linear_in = nn.Linear(embed_dim, hidden_dims[0], bias=bias)
+        self.linear_in = nn.Linear(embed_dim, hidden_dims[0], bias=biases)
         self.dropout_in = nn.Dropout(p=dropout)
         self.relu_in = nn.ReLU(inplace=True)
 
         hidden_layers = []
-        if hidden_dims > 1:
+        if len(hidden_dims) > 1:
             for i in range(1, len(hidden_dims)):
-                hidden_layers.append(nn.Linear(hidden_dims[i - 1], hidden_dims[i], bias=bias))
+                hidden_layers.append(nn.Linear(hidden_dims[i - 1], hidden_dims[i], bias=biases))
                 if i % 2 == 0:
                     hidden_layers.append(nn.Dropout(p=dropout))
                 hidden_layers.append(nn.ReLU(inplace=True))
         self.hidden_layers = nn.Sequential(*hidden_layers)
 
-        self.linear_out = nn.Linear(hidden_dims[-1], num_classes, bias=bias)
+        self.linear_out = nn.Linear(hidden_dims[-1], num_classes, bias=biases)
 
     def forward(self, x):
         x = self.linear_in(x)
@@ -145,18 +146,16 @@ class Resnet(nn.Module):
         self.avg_pool = nn.AvgPool2d(pool_size)
 
         # linear output layer
-        pooled_feature_map_size = (img_size // np.product(strides) // pool_size) ** 2
+        pooled_feature_map_size = (img_size // np.product(strides) // pool_size // 2) ** 2
         self.linear_label = nn.Linear(block_channels[-1] * pooled_feature_map_size, num_classes, bias=False)
 
     def forward(self, x):
         embedding = self.net(x)
-
         output = self.avg_pool(embedding)
         output = output.reshape(output.shape[0], -1)
-
         label_output = self.linear_label(output)
 
-        return output, label_output
+        return label_output
 
     def _block_layer(self, in_channels, block_channels, kernel_size, stride, num_blocks):
         assert num_blocks >= 2, f"At least 2 blocks per layer required; {num_blocks} given."
