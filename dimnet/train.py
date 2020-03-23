@@ -22,8 +22,8 @@ import wandb
 wandb.init(project="v2f")
 
 # TRAINING HYPERPARAMETERS
-EPOCHS = 100000
-BATCHSIZE = 2
+EPOCHS = 150
+BATCHSIZE = 32
 LEARNING_RATE = 0.1
 N_EPOCHS = 100000
 MOMENTUM = 0.9
@@ -39,7 +39,7 @@ KERNEL_SIZES = [3, 3, 3, 3]
 STRIDES = [1, 2, 2, 2]  # 64 => 64 -> 32 -> 16 -> 8 => 8
 POOL_SIZE = 4  # 8 => 2
 
-NUM_WORKERS = 64
+NUM_WORKERS = 16
 RANDOM_SEED = 15213
 
 #MODEL PARAMS
@@ -165,7 +165,6 @@ def run_epoch(n_epoch, encoder, classifier, dataloader, optimizer, epoch):
 
     return avgloss
 
-
 def evaluate(encoder, classifier, test_loader, criterion=None):
     encoder.eval()
     classifier.eval()
@@ -179,7 +178,7 @@ def evaluate(encoder, classifier, test_loader, criterion=None):
             data, labels = data.cuda(), labels.cuda()
 
             # get outputs
-            embeddings = encoder(data)
+            embeddings = encoder(data.float())
             outputs = classifier(embeddings)
 
             # get predictions
@@ -192,19 +191,11 @@ def evaluate(encoder, classifier, test_loader, criterion=None):
 
             # compute auc over the batch
             batch_size = data.size()[0]  # final batch might be smaller than the rest
-            batch_roc = roc_auc_score(labels.cpu().detach().numpy(), pred_labels.cpu().detach().numpy(),
-                                      multiclass='ovr')
-            auc.extend([batch_roc] * batch_size)
-
-            # evaluate loss
-            # loss = criterion(outputs, labels.long())
-            # test_loss.extend([loss.item()] * batch_size)
 
             # clean up
             torch.cuda.empty_cache()
             del data, labels
     accuracy = correct / total
-    auc = np.mean(auc)
 
     encoder.train()
     classifier.train()
@@ -256,13 +247,13 @@ def train(train_dataset, model_mode):
         # validate the model 
         acc, auc = evaluate(encoder_network, mlp_network, data_loader_test)
         print("Accuracy: " + str(acc))
-        print("AUC: " + str(auc))
+        # print("AUC: " + str(auc))
         # check point 
         LOGGER.checkpoint(epoch)
         # write out the logs 
         LOGGER.write_logs()
         # poke your scheduler if you wish...
-        # scheduler.step(epoch_loss)
+        scheduler.step(epoch_loss)
 
 
 if __name__ == "__main__":
