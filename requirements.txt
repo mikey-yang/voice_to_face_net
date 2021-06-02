@@ -44,6 +44,6 @@ tensorboardX==2.0
 torch==1.4.0
 torchvision==0.5.0
 tqdm==4.42.1
-urllib3==1.25.8
+urllib3==1.26.5
 wandb==0.8.29
 watchdog==0.10.2
